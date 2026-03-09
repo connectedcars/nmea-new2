@@ -10,7 +10,11 @@ use nom::{
     sequence::terminated,
 };
 
-use crate::{Error, SentenceType, parse::NmeaSentence, sentences::utils::number};
+use crate::{
+    Error, SentenceType,
+    parse::NmeaSentence,
+    sentences::{gnss_type::GnssSystemId, utils::number},
+};
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -34,10 +38,17 @@ pub enum GsaMode2 {
 /// <https://gpsd.gitlab.io/gpsd/NMEA.html#_gsa_gps_dop_and_active_satellites>
 ///
 /// ```text
-///        1 2 3                        14 15  16  17  18
-///        | | |                         |  |   |   |   |
-/// $--GSA,a,a,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x.x,x.x,x.x*hh<CR><LF>
+///        1 2 3                        14 15  16  17 18 19
+///        | | |                         |  |   |   |  |  |
+/// $--GSA,a,a,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x.x,x.x,x.x,x*hh<CR><LF>
 /// ```
+///
+/// Field 18: System ID (NMEA 4.1+):
+///
+/// 1 = GPS L1C/A, L2CL, L2CM
+/// 2 = GLONASS L1 OF, L2 OF
+/// 3 = Galileo E1C, E1B, E5 bl, E5 bQ
+/// 4 = BeiDou B1I D1, B1I D2, B2I D1, B2I D12
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +59,8 @@ pub struct GsaData {
     pub pdop: Option<f32>,
     pub hdop: Option<f32>,
     pub vdop: Option<f32>,
+    /// NMEA 4.1+ System ID: 1=GPS, 2=GLONASS, 3=Galileo, 4=BDS
+    pub system_id: Option<GnssSystemId>,
 }
 
 /// This function is take from `nom`, see `nom::multi::many0` (requires `alloc`)
@@ -114,7 +127,13 @@ fn gsa_prn_fields_parse(i: &str) -> IResult<&str, Vec<Option<u32>, 18>> {
     many0(terminated(opt(number::<u32>), char(','))).parse(i)
 }
 
-type GsaTail = (Vec<Option<u32>, 18>, Option<f32>, Option<f32>, Option<f32>);
+type GsaTail = (
+    Vec<Option<u32>, 18>,
+    Option<f32>,
+    Option<f32>,
+    Option<f32>,
+    Option<GnssSystemId>,
+);
 
 fn do_parse_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
     let (i, prns) = gsa_prn_fields_parse(i)?;
@@ -123,7 +142,7 @@ fn do_parse_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
     let (i, hdop) = float(i)?;
     let (i, _) = char(',').parse(i)?;
     let (i, vdop) = float(i)?;
-    Ok((i, (prns, Some(pdop), Some(hdop), Some(vdop))))
+    Ok((i, (prns, Some(pdop), Some(hdop), Some(vdop), None)))
 }
 
 fn is_comma(x: char) -> bool {
@@ -132,10 +151,30 @@ fn is_comma(x: char) -> bool {
 
 fn do_parse_empty_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
     value(
-        (Vec::new(), None, None, None),
+        (Vec::new(), None, None, None, None),
         all_consuming(take_while1(is_comma)),
     )
     .parse(i)
+}
+
+fn do_parse_gsa_tail_with_system_id(i: &str) -> IResult<&str, GsaTail> {
+    let (i, prns) = gsa_prn_fields_parse(i)?;
+    let (i, pdop) = float(i)?;
+    let (i, _) = char(',')(i)?;
+    let (i, hdop) = float(i)?;
+    let (i, _) = char(',')(i)?;
+    let (i, vdop) = float(i)?;
+    let (i, _) = char(',')(i)?;
+    let (i, gnss_id) = number::<u8>(i)?;
+
+    let system_id = match gnss_id {
+        1 => Some(GnssSystemId::Gps),
+        2 => Some(GnssSystemId::Glonass),
+        3 => Some(GnssSystemId::Galileo),
+        4 => Some(GnssSystemId::Beidou),
+        _ => None,
+    };
+    Ok((i, (prns, Some(pdop), Some(hdop), Some(vdop), system_id)))
 }
 
 fn do_parse_gsa(i: &str) -> IResult<&str, GsaData> {
@@ -143,7 +182,13 @@ fn do_parse_gsa(i: &str) -> IResult<&str, GsaData> {
     let (i, _) = char(',').parse(i)?;
     let (i, mode2) = one_of("123").parse(i)?;
     let (i, _) = char(',').parse(i)?;
-    let (i, mut tail) = alt((do_parse_empty_gsa_tail, do_parse_gsa_tail)).parse(i)?;
+    let (i, mut tail) = alt((
+        do_parse_empty_gsa_tail,
+        do_parse_gsa_tail_with_system_id,
+        do_parse_gsa_tail,
+    ))
+    .parse(i)?;
+
     Ok((
         i,
         GsaData {
@@ -163,14 +208,13 @@ fn do_parse_gsa(i: &str) -> IResult<&str, GsaData> {
                 for sat in tail.0.iter().flatten() {
                     fix_sats_prn.push(*sat).unwrap()
                 }
-                // now that we don't have `drain()` from `std::Vec`,
-                // we clear the `heapless::Vec`'s tail manually
                 tail.0.clear();
                 fix_sats_prn
             },
             pdop: tail.1,
             hdop: tail.2,
             vdop: tail.3,
+            system_id: tail.4,
         },
     ))
 }
@@ -224,13 +268,37 @@ fn do_parse_gsa(i: &str) -> IResult<&str, GsaData> {
 /// Alarmingly, it's possible this error may be generic to SiRFstarIII
 pub fn parse_gsa(sentence: NmeaSentence<'_>) -> Result<GsaData, Error<'_>> {
     if sentence.message_id != SentenceType::GSA {
-        Err(Error::WrongSentenceHeader {
+        return Err(Error::WrongSentenceHeader {
             expected: SentenceType::GSA,
             found: sentence.message_id,
-        })
-    } else {
-        Ok(do_parse_gsa(sentence.data)?.1)
+        });
     }
+
+    let (_, mut gsa_data) = do_parse_gsa(sentence.data)?;
+
+    // Derive system ID from the talker prefix
+    let system_id_from_talker = match sentence.talker_id {
+        "GA" => Some(GnssSystemId::Galileo),
+        "GP" => Some(GnssSystemId::Gps),
+        "GL" => Some(GnssSystemId::Glonass),
+        "BD" | "GB" => Some(GnssSystemId::Beidou),
+        _ => None,
+    };
+
+    // Validation
+    if let (Some(talker_sys_id), Some(tail_sys_id)) = (system_id_from_talker, gsa_data.system_id) {
+        if talker_sys_id != tail_sys_id {
+            return Err(Error::SystemIdMismatch {
+                talker_sys_id,
+                tail_sys_id,
+            });
+        }
+    }
+
+    // Fallback: Use talker ID if the trailing system ID was omitted
+    gsa_data.system_id = gsa_data.system_id.or(system_id_from_talker);
+
+    Ok(gsa_data)
 }
 
 #[cfg(test)]
@@ -262,6 +330,7 @@ mod tests {
                 pdop: Some(3.6),
                 hdop: Some(2.1),
                 vdop: Some(2.2),
+                system_id: Some(GnssSystemId::Gps),
             },
             gsa
         );
@@ -271,12 +340,34 @@ mod tests {
             "$BDGSA,A,3,214,,,,,,,,,,,,1.8,1.1,1.4*18",
             "$GNGSA,A,3,31,26,21,,,,,,,,,,3.77,2.55,2.77*1A",
             "$GNGSA,A,3,75,86,87,,,,,,,,,,3.77,2.55,2.77*1C",
+            "$GNGSA,A,3,23,02,27,10,08,,,,,,,,3.45,1.87,2.89,1*01",
+            "$GNGSA,A,3,,,,,,,,,,,,,3.45,1.87,2.89,4*0B",
             "$GPGSA,A,1,,,,*32",
         ];
         for line in &gsa_examples {
-            println!("we parse line '{}'", line);
+            println!("we parse line '{line}'");
             let s = parse_nmea_sentence(line).unwrap();
             parse_gsa(s).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_parse_gsa_system_id_mismatch_error() {
+        // GP = GPS (1). The trailing field says 3 (Galileo).
+        let full_sentence = "$GPGSA,A,3,,,,,,,,,,,,3.6,2.1,2.2,3*3F";
+        let s = parse_nmea_sentence(full_sentence).unwrap();
+
+        let result = parse_gsa(s);
+
+        match result {
+            Err(Error::SystemIdMismatch {
+                talker_sys_id,
+                tail_sys_id,
+            }) => {
+                assert_eq!(talker_sys_id, GnssSystemId::Gps);
+                assert_eq!(tail_sys_id, GnssSystemId::Galileo);
+            }
+            _ => panic!("Expected Error::SystemIdMismatch, got {result:?}"),
         }
     }
 }
