@@ -56,3 +56,28 @@ impl fmt::Display for GnssType {
         }
     }
 }
+
+define_enum_with_count!(
+    /// Supported GNSS types for System ID (GSA NMEA 4.1+)
+    enum GnssSystemId {
+        /// Global Positioning System (GPS) from the United States.
+        Gps,
+        /// Globalnaya Navigazionnaya Sputnikovaya Sistema (GLONASS) from Russia.
+        Glonass,
+        /// European Global Navigation System (Galileo) from Europe.
+        Galileo,
+        /// BeiDou Navigation Satellite System (BDS) from China.
+        Beidou,
+    }
+);
+
+impl fmt::Display for GnssSystemId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::Beidou => write!(f, "Beidou"),
+            Self::Galileo => write!(f, "Galileo"),
+            Self::Gps => write!(f, "GPS"),
+            Self::Glonass => write!(f, "GLONASS"),
+        }
+    }
+}
