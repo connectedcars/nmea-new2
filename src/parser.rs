@@ -253,9 +253,7 @@ impl<'a> Nmea {
             Some(last) => last == &gsa.talker_id && !is_accumulating_talker,
         };
 
-        if should_reset {
-            self.fix_satellites_prns = Some(Vec::new());
-        } else if self.fix_satellites_prns.is_none() {
+        if should_reset && self.fix_satellites_prns.is_none() {
             self.fix_satellites_prns = Some(Vec::new());
         }
 
