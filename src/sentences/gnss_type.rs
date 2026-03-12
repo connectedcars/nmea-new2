@@ -57,6 +57,17 @@ impl fmt::Display for GnssType {
     }
 }
 
+impl From<GnssSystemId> for GnssType {
+    fn from(id: GnssSystemId) -> Self {
+        match id {
+            GnssSystemId::Gps => Self::Gps,
+            GnssSystemId::Glonass => Self::Glonass,
+            GnssSystemId::Galileo => Self::Galileo,
+            GnssSystemId::Beidou => Self::Beidou,
+        }
+    }
+}
+
 define_enum_with_count!(
     /// Supported GNSS types for System ID (GSA NMEA 4.1+)
     enum GnssSystemId {
