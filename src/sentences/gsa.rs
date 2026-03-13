@@ -153,23 +153,13 @@ fn do_parse_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
             Some(pdop),
             Some(hdop),
             Some(vdop),
-            system_id_from_maybe_raw(sys_id),
+            sys_id.and_then(|id| GnssSystemId::try_from(id).ok()),
         ),
     ))
 }
 
 fn is_comma(x: char) -> bool {
     x == ','
-}
-
-fn system_id_from_maybe_raw(maybe_raw_system_id: Option<u8>) -> Option<GnssSystemId> {
-    match maybe_raw_system_id {
-        Some(1) => Some(GnssSystemId::Gps),
-        Some(2) => Some(GnssSystemId::Glonass),
-        Some(3) => Some(GnssSystemId::Galileo),
-        Some(4) => Some(GnssSystemId::Beidou),
-        _ => None,
-    }
 }
 
 fn do_parse_empty_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
@@ -179,7 +169,7 @@ fn do_parse_empty_gsa_tail(i: &str) -> IResult<&str, GsaTail> {
     // Optionally grab the system ID, ensuring there's no junk left over
     let (i, sys_id) = all_consuming(opt(number::<u8>)).parse(i)?;
 
-    let system_id = system_id_from_maybe_raw(sys_id);
+    let system_id = sys_id.and_then(|id| GnssSystemId::try_from(id).ok());
 
     Ok((i, (Vec::new(), None, None, None, system_id)))
 }

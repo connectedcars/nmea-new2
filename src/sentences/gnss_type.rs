@@ -92,3 +92,17 @@ impl fmt::Display for GnssSystemId {
         }
     }
 }
+
+impl TryFrom<u8> for GnssSystemId {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Gps),
+            2 => Ok(Self::Glonass),
+            3 => Ok(Self::Galileo),
+            4 => Ok(Self::Beidou),
+            _ => Err(()),
+        }
+    }
+}
